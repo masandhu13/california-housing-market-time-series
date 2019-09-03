@@ -1,0 +1,285 @@
+---
+title: "Time Series Analysis - California Housing Market"
+author: "Mannat Sandhu, Joyce Shao"
+date: "March 22, 2019"
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: '2'
+  html_document:
+    toc: yes
+    toc_depth: 2
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+## Goal
+In this document, we will use econometric tools to study the housing prices in the US. In particular, we will try to predict the housing prices for the state of California using time series analysis.
+
+## Dataset
+The dataset used is the [Zillow's aggregated housing market and economic data](https://zillow.com/data) which is collected by the Zillow's Economic Research Team from a variety of public and proprietary sources.
+
+
+# Data Analysis
+## Load Libraries
+```{r, results='hide', message=FALSE, warning=FALSE}
+# Clear workspace.
+rm(list=ls())
+```
+
+```{r libraries, results='hide', message=FALSE, warning=FALSE}
+library(data.table)
+library(DT)
+library(ggplot2)
+library(plyr)
+library(dplyr)
+library(usmap)
+library(ggplot2)
+library(forecast)
+library(tseries)
+library(lars)
+library(itsmr)
+```
+
+## Load Data
+```{r data_load}
+# Modify the filepath as per the location in the local machine.
+data <- fread("../Zillow/State_time_series.csv")
+# data <- read.csv("/Users/JoyceShao/Downloads/zecon/State_time_series.csv")
+dim(data)
+```
+
+The data contains 13,212 rows and 82 columns. 
+
+## Exploration
+```{r view_data, eval = FALSE}
+# Manually explore the data.
+View(data)
+```
+If you look at the data manually, you can see that there are a lot of missing values. One of the reasons for this is that the data is collected from a variety of sources and combined, instead of one aggregate survey. 
+
+We can check the exact percentage of missing values.
+
+```{r missing_values}
+missing_values_table <- table(is.na(data))
+num_missing <- as.numeric(missing_values_table["FALSE"][1])
+num_not_missing <- as.numeric(missing_values_table["TRUE"][1])
+percentage_missing <- (num_missing/(num_missing + num_not_missing))*100
+cat("Percentage of missing values in the dataset is", percentage_missing, "%.")
+```
+41.49% of the values are missing from the dataset.
+
+## Visualization
+```{r plotting0, results='hide', message=FALSE, warning=FALSE}
+# Plot some graphs to visualize the data.
+data$Date <- as.Date(data$Date)
+data$Year <- year(data$Date)
+complete_data <- data
+```
+
+In order to use the 'usmap' package, we will need to change the column holding states from its name 'RegionName' to 'state'. In addition, the state names are written without spaces in the original dataset, so we have to manually change the variable objects in order for the 'usmap' package to work. Next, we will create a subset of the data containing only California's housing data for comparative analysis.
+
+
+```{r plotting, results='hide', message=FALSE, warning=FALSE}
+names(data)[2] <- c("state")
+
+## State names are not separated, so we need to manually do this in order to plot on US MAP.
+table(data$state)
+data$state <- as.character(data$state)
+data$state[data$state == "DistrictofColumbia"] <- "District of Columbia"
+data$state[data$state == "NewHampshire"] <- "New Hampshire"
+data$state[data$state == "NewJersey"] <- "New Jersey"
+data$state[data$state == "NewMexico"] <- "New Mexico"
+data$state[data$state == "NewYork"] <- "New York"
+data$state[data$state == "NorthCarolina"] <- "North Carolina"
+data$state[data$state == "NorthDakota"] <- "North Dakota"
+data$state[data$state == "RhodeIsland"] <- "Rhode Island"
+data$state[data$state == "SouthCarolina"] <- "South Carolina"
+data$state[data$state == "SouthDakota"] <- "South Dakota"
+data$state[data$state == "UnitedStates"] <- "United States"
+data$state[data$state == "WestVirginia"] <- "West Virginia"
+data$state <- as.factor(data$state)
+
+# Create California subset
+cal <- subset(data, state=="California")
+```
+
+
+The smoothed seasonally adjusted measure of the median estimated home value accross the different states and time can be viewed in the graph below. 
+
+```{r fig.height = 7, fig.width = 7, echo = FALSE, warning=FALSE}
+# Data Visualization: Use ggmap to plot the median prices per State in a given year. Not every state appears in each year from 1996-2017.
+ggplot(data, aes(Date, ZHVI_AllHomes, color=state )) + geom_line() + theme_bw() + theme(legend.position="bottom") + labs(x = "Year") + labs(y = "Median Home Value") + labs(colour = "States")
+```
+
+
+As it is difficult to differentiate the trends of home values between all the states in the US over time, we will focus on just comparing the home value of California against the average median home values of the US. In the graphs below, we witness the substantial higher trend of California again the trend of all the aggregated states in the US.
+
+The average housing sales price of all the states in the US grows slowly compared to California. After 2010, the home prices in California rapidly increase and this trend seems to reoccur when we analyze the smoothed seasonally adjusted median home market values. Another interesting factor to analyze is the % of the homes that are decreasing in it's value over time, and we will witness the effect of the 2008 Market Crash as the percentages spike during 2008-2010 timeframe for both California and the US. 
+
+
+```{r plotting_3, echo = FALSE}
+
+## Aggregate sales prices 
+mean_sale_price <- aggregate(Sale_Prices ~ Year, data=data, mean)
+calmean <- aggregate(Sale_Prices ~ Year, data=cal, mean)
+mean_sale_price$calmean <- calmean[,2]
+
+## 
+mean_value <- aggregate(ZHVI_AllHomes ~ Year, data=data, mean)
+calvalue <- aggregate(ZHVI_AllHomes ~ Year, data=cal, mean)
+mean_value$calvalue <- calvalue[,2]
+
+##
+drop <- aggregate(PctOfHomesDecreasingInValues_AllHomes ~ Year, data=data, mean)
+dropC <- aggregate(PctOfHomesDecreasingInValues_AllHomes ~ Year, data=cal, mean)
+drop$cal <- dropC[,2]
+```
+
+
+```{r plotting_4, echo = FALSE}
+# % of Homes that Lost Value of US vs. Cal from 1996-2017
+# We can see the huge spike in around 2008, can also verify this with the other variable 'PctOfHomesIncreasingInValues_AllHomes'.
+ggplot(mean_sale_price, aes(Year)) + geom_line(aes(y=Sale_Prices, color = "US")) + geom_line(aes(y=calmean, color = "California")) + theme_bw() + labs(x = "Year") + labs(y = "Mean Sales Prices") + labs(title = "Mean Home Sales Prices", subtitle = "Mean House Sales Prices in the US and California from 2008-2017") + labs(colour = "Trend")
+
+ggplot(mean_value, aes(Year)) + geom_line(aes(y=ZHVI_AllHomes, color = "US")) + geom_line(aes(y=calvalue, color = "California")) + theme_bw() + labs(x = "Year") + labs(y = "ZHVI House Market Value") + labs(title = "House Market Value", subtitle = "Seasonally Adjusted Median House Market Value in the US and California from 1996-2017") + labs(colour = "Trend")
+
+ggplot(drop, aes(Year)) + geom_line(aes(y=PctOfHomesDecreasingInValues_AllHomes, color = "US")) + geom_line(aes(y=cal, color = "California")) + theme_bw() + labs(x = "Year") + labs(y = "% of Homes Decreasing in Value") + labs(title = "Decreasing Home Value", subtitle = "% of Homes Decreasing in Value in the US and California from 1996-2017") + labs(colour = "Trend")
+
+```
+
+Analyzing the differences within the states can be best done by mapping the variables on the US map accross certain periods. 
+
+
+```{r plotting_5, results='hide', message=FALSE, warning=FALSE}
+# Create year subsets for mapping visualization
+for (i in 1996:2017) {
+  Y <- subset(data, Year==i)
+  assign(paste("Y", i, sep=""), Y) 
+}
+```
+
+
+After generating different subsets for the fixed effects by year, we will look at the Seasonaly Adjusted Median Home Values in 1996, 2008, and 2017 to see the changes over time and at the time of the market crash.
+
+```{r plotting_6, echo = FALSE}
+zhvi_price_1996 <- aggregate(ZHVI_AllHomes ~ state, data=Y1996, mean)
+zhvi_price_2008 <- aggregate(ZHVI_AllHomes ~ state, data=Y2008, mean)
+zhvi_price_2017 <- aggregate(ZHVI_AllHomes ~ state, data=Y2017, mean)
+
+## A smoothed seasonally adjusted measure of the median estimated home value for 1996, 2008, and 2017.
+plot_usmap(data = zhvi_price_1996, values = "ZHVI_AllHomes", lines = "red") + 
+  scale_fill_continuous(low = "white", high = "red", name = "Median Home Market Value (1996)", label = scales::comma) + 
+  theme(legend.position = "right") + labs()
+
+plot_usmap(data = zhvi_price_2008, values = "ZHVI_AllHomes", lines = "red") + 
+  scale_fill_continuous(low = "white", high = "blue", name = "Median Home Market Value (2008)", label = scales::comma) + 
+  theme(legend.position = "right") + labs()
+
+plot_usmap(data = zhvi_price_2017, values = "ZHVI_AllHomes", lines = "red") + 
+  scale_fill_continuous(low = "white", high = "brown", name = "Median Home Market Value (2017)", label = scales::comma) + 
+  theme(legend.position = "right")
+```
+
+** Missing data for states in 1996, but we will only focus on California. **
+
+We can see that California has been the most expensive state to live as it had the highest median home value in 1996. What we also notice is that not only has the median home market values substantially increased over time by the decades for all the states, the median home values of California relative to the other states have increased as well. This widens the gap between the home values of California and other states. 
+
+## Time series modeling
+### Data cleanup
+For this part, we will limit the data only to California.
+
+``` {r restrict_data}
+# ML Prediction models - limit data to only California.
+california_data <- as.data.frame(complete_data[complete_data$RegionName == "California", ])
+california_data_filtered <- california_data[c("Date", "Year", "ZHVI_AllHomes")]
+california_data_filtered_ts <- ts(california_data_filtered$ZHVI_AllHomes, start=c(1996, 04), freq=12)
+```
+
+Plotting the time series - 
+
+```{r plotting_cal_data, echo = FALSE}
+plot(california_data_filtered_ts, main="Zillow Home Value Index (ZHVI) median home value in California", xlab="Value", ylab = "Year")
+```
+
+### Train-Test spilt
+We will use the most recent observations (for the year 2017) as the test set, and the observations before that as the training set.
+
+```{r train_test_split, results='hide', message=FALSE, warning=FALSE}
+train_data <- california_data_filtered[california_data_filtered$Year < 2017, ]
+test_data <- california_data_filtered[california_data_filtered$Year >= 2017, ]
+# Time Series analysis
+train_data_ts <- ts(train_data$ZHVI_AllHomes, start=c(1996,04), freq=12)
+```
+
+### Analyse seasonal trends
+We can decompose the training data time series as additive time series - 
+
+```{r, echo = FALSE}
+train_data_ts_decomposition <- decompose(train_data_ts)
+plot(train_data_ts_decomposition)
+```
+
+We can see that there is very little seasonal variation in the data - this can be observed from the value of the effect of the seasonal observations, with respect to the actual value of the prices.
+
+To see it further, we see that the plot of seasonally adjusted prices is almost identical to the plot without seasonal adjustment.
+
+*EDIT*: The variable ZHVI_AllHomes, which we are using as the outcome variable for our analysis, is already the smoothed seasonaly adjusted values of the homes. With the training data, we can verify that the data is already seasonally adjusted as both the plots below return an identical trend. 
+
+```{r, echo = FALSE}
+train_data_ts_seasonal_adjusted <- train_data_ts - train_data_ts_decomposition$seasonal
+plot.ts(train_data_ts_seasonal_adjusted, main="Seasonally Adjusting ZHVI median home value \n (Training Data)", xlab="Value", ylab = "Year")
+plot.ts(train_data_ts, main="Actual ZHVI median home value \n (Training Data)", xlab="Value", ylab = "Year")
+```
+
+### Fitting a model
+We will use the function auto.arima to fit our model - 
+
+```{r, echo = FALSE}
+arima_fit <- auto.arima(train_data_ts_seasonal_adjusted)
+forecasted_arima_fit <- forecast::forecast(arima_fit, 24)
+plot(forecasted_arima_fit, lwd=2)
+```
+
+Using the ACF and PACF, we can observe the statisticall signifance of the lags in our ARIMA time series. In the ACF graph, we can see a downward sloping trend that cuts off at 4, suggesting an AR(4) model. We can verfiy this by looking at the PACF, which replicates a similar pattern.
+
+```{r, echo = FALSE}
+acf(train_data_ts_seasonal_adjusted, lag.max=50, type="correlation", main = "ACF")
+acf(train_data_ts_seasonal_adjusted, lag.max=50, type="partial", main = "Partial ACF")
+```
+
+## Bootstrapping
+```{r bootstrap}
+
+# Use bootstrapping to estimate the coefficients or phi's for the model
+x <- train_data[,1]
+y <- train_data$ZHVI_AllHomes
+n <- length(x)
+B <- 1000
+reg <- lm(y[5:n]~y[4:(n-1)]+y[3:(n-2)]+y[2:(n-3)]+y[1:(n-4)], data=x)
+fit.B <- reg
+results <- matrix(NA, nrow=B, ncol = (length(coef(fit.B))+1))
+
+for(i in 1:B){
+  fit.B <- reg
+  coef.B <- as.numeric(coef(fit.B))
+  results[i, 1] <- i
+  results[i, 2:ncol(results)] <- t(as.matrix(coef.B))
+}
+
+results <- as.data.frame(results)
+names(results) <- c("i", names(coef(reg)))
+results[1,]
+```
+
+## Yule Walker
+With the Yule-Walker method, which estimates the coefficients in ARMA models, we can verify the results:
+
+```{r yw}
+yw(y, 4)
+```
+
+The results for coefficients of the lags done through Bootstrapping and the Yule Walker functions are not the same, so bootstrapping might not be as accurate of an method to estimate the coefficients. 
